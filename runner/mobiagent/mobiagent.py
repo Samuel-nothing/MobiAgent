@@ -12,10 +12,12 @@ import os
 import argparse
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
+import cv2
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-MAX_STEPS = 30
+MAX_STEPS = 35
 
 class Device(ABC):
     @abstractmethod
@@ -56,6 +58,14 @@ class AndroidDevice(Device):
             "去哪儿": "com.Qunar",
             "华住会": "com.htinns",
             "饿了么": "me.ele",
+            "支付宝": "com.eg.android.AlipayGphone",
+            "淘宝": "com.taobao.taobao",
+            "京东": "com.jingdong.app.mall",
+            "美团": "com.sankuai.meituan",
+            "滴滴出行": "com.sdu.didi.psnger",
+            "微信": "com.tencent.mm",
+            "微博": "com.sina.weibo",
+            "携程": "ctrip.android.view",
         }
 
     def start_app(self, app):
@@ -147,19 +157,39 @@ Target element's description: {description}
 Your output should be a JSON object with the following format:
 {{"bbox": [x1, y1, x2, y2]}}'''
 
+decider_prompt_template_zh = """
+你是一个手机使用AI代理。现在你的任务是“{task}”。
+你的操作历史如下：
+{history}
+请根据截图和你的操作历史提供下一步操作。在提供操作之前，你需要进行仔细的推理。
+你的操作范围包括：
+- 名称：点击（click），参数：目标元素（target_element，对要点击的UI元素的高级描述）。
+- 名称：滑动（swipe），参数：方向（direction，UP、DOWN、LEFT、RIGHT中的一个）。
+- 名称：输入（input），参数：文本（text，要输入的文本）。
+- 名称：等待（wait），参数：（无参数，将等待1秒）。
+- 名称：完成（done），参数：（无参数）。
+你的输出应该是一个如下格式的JSON对象：
+{{"reasoning": "你的推理分析过程在此", "action": "下一步操作（click、input、swipe、done中的一个）", "parameters": {{"param1": "value1", ...}}}}"""
+
+grounder_prompt_template_no_bbox_zh = """
+根据截图、用户意图和目标UI元素的描述，使用**绝对坐标**提供该元素的坐标。
+用户意图：{reasoning}
+目标元素描述：{description}
+你的输出应该是一个如下格式的JSON对象：
+{{"coordinates": [x, y]}}"""
+
+grounder_prompt_template_bbox_zh = """"
+根据截图、用户意图和目标UI元素的描述，使用**绝对坐标**提供该元素的边界框。
+用户意图：{reasoning}
+目标元素描述：{description}
+你的输出应该是一个如下格式的JSON对象：
+{{"bbox": [x1, y1, x2, y2]}}"""
 
 screenshot_path = "screenshot.jpg"
 factor = 0.5
 
 prices = {}
 
-app_scale = {
-    "去哪儿": 1.0,
-    "飞猪": 0.7,
-    "华住会": 1.0,
-    "携程": 0.9,
-    "同城": 1.0,
-}
 
 def get_screenshot(device):
     device.screenshot(screenshot_path)
@@ -170,6 +200,58 @@ def get_screenshot(device):
     img.save(buffered, format="JPEG")
     screenshot = base64.b64encode(buffered.getvalue()).decode("utf-8")
     return screenshot
+
+def create_swipe_visualization(data_dir, image_index, direction):
+    """为滑动动作创建可视化图像"""
+    try:
+        # 读取原始截图
+        img_path = os.path.join(data_dir, f"{image_index}.jpg")
+        if not os.path.exists(img_path):
+            return
+            
+        img = cv2.imread(img_path)
+        if img is None:
+            return
+            
+        height, width = img.shape[:2]
+        
+        # 根据方向计算箭头起点和终点
+        center_x, center_y = width // 2, height // 2
+        arrow_length = min(width, height) // 4
+        
+        if direction == "up":
+            start_point = (center_x, center_y + arrow_length // 2)
+            end_point = (center_x, center_y - arrow_length // 2)
+        elif direction == "down":
+            start_point = (center_x, center_y - arrow_length // 2)
+            end_point = (center_x, center_y + arrow_length // 2)
+        elif direction == "left":
+            start_point = (center_x + arrow_length // 2, center_y)
+            end_point = (center_x - arrow_length // 2, center_y)
+        elif direction == "right":
+            start_point = (center_x - arrow_length // 2, center_y)
+            end_point = (center_x + arrow_length // 2, center_y)
+        else:
+            return
+            
+        # 绘制箭头
+        cv2.arrowedLine(img, start_point, end_point, (255, 0, 0), 8, tipLength=0.3)  # 蓝色箭头
+        
+        # 添加文字说明
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text = f"SWIPE {direction.upper()}"
+        text_size = cv2.getTextSize(text, font, 1.5, 3)[0]
+        text_x = (width - text_size[0]) // 2
+        text_y = 50
+        cv2.putText(img, text, (text_x, text_y), font, 1.5, (255, 0, 0), 3)  # 蓝色文字
+        
+        # 保存可视化图像
+        swipe_path = os.path.join(data_dir, f"{image_index}_swipe.jpg")
+        cv2.imwrite(swipe_path, img)
+        
+    except Exception as e:
+        logging.warning(f"Failed to create swipe visualization: {e}")
+
 
 def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
     history = []
@@ -187,7 +269,7 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
 
         screenshot = get_screenshot(device)
 
-        decider_prompt = decider_prompt_template.format(
+        decider_prompt = decider_prompt_template_zh.format(
             task=task,
             history=history_str
         )
@@ -219,13 +301,22 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
         reacts.append(converted_item)
         action = decider_response["action"]
 
+        # compute image index for this loop iteration (1-based)
+        image_index = len(actions) + 1
         current_dir = os.getcwd()
         img_path = os.path.join(current_dir, f"screenshot.jpg")
-        save_path = os.path.join(data_dir, f"{len(actions) + 1}.jpg")
+        save_path = os.path.join(data_dir, f"{image_index}.jpg")
         img = Image.open(img_path)
         img.save(save_path)
 
-        hierarchy_path = os.path.join(data_dir, f"{len(actions) + 1}.xml")
+        # attach index to the most recent react (reasoning)
+        if reacts:
+            try:
+                reacts[-1]["action_index"] = image_index
+            except Exception:
+                pass
+
+        hierarchy_path = os.path.join(data_dir, f"{image_index}.xml")
         hierarchy = device.dump_hierarchy()
         with open(hierarchy_path, "w", encoding="utf-8") as f:
             f.write(hierarchy)
@@ -233,7 +324,8 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
         if action == "done":
             print("Task completed.")
             actions.append({
-                "type": "done"
+                "type": "done",
+                "action_index": image_index
             })
             break
         if action == "click":
@@ -264,19 +356,19 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
                 position_x = (x1 + x2) // 2
                 position_y = (y1 + y2) // 2
                 device.click(position_x, position_y)
+                # save action (record index only)
                 actions.append({
                     "type": "click",
                     "position_x": position_x,
                     "position_y": position_y,
-                    "bounds": [
-                        x1, y1, x2, y2
-                    ]
+                    "bounds": [x1, y1, x2, y2],
+                    "action_index": image_index
                 })
                 history.append(decider_response_str)
 
                 current_dir = os.getcwd()
                 img_path = os.path.join(current_dir, f"screenshot.jpg")
-                save_path = os.path.join(data_dir, f"{len(actions)}_highlighted.jpg")
+                save_path = os.path.join(data_dir, f"{image_index}_highlighted.jpg")
                 img = Image.open(img_path)
                 draw = ImageDraw.Draw(img)
                 font = ImageFont.truetype("msyh.ttf", 40)
@@ -287,33 +379,31 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
                 img.save(save_path)
 
                 # 拉框
-                bounds_path = os.path.join(data_dir, f"{len(actions)}_bounds.jpg")
+                bounds_path = os.path.join(data_dir, f"{image_index}_bounds.jpg")
                 img_bounds = Image.open(save_path)
                 draw_bounds = ImageDraw.Draw(img_bounds)
                 draw_bounds.rectangle([x1, y1, x2, y2], outline='red', width=5)
                 img_bounds.save(bounds_path)
 
-                # # 画点
-                # with open(save_path, 'rb') as f:
-                #     image_data = f.read()
-                # nparr = np.frombuffer(image_data, np.uint8)
-                # cv2image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                # if action["type"] == "click":
-                #     x = int(action['position_x'])
-                #     y = int(action['position_y'])
-                #     cv2.circle(cv2image, (x, y), 50, (0, 0, 255), 10)
-                # elif action["type"] == "swipe":
-                #     x1 = int(action['press_position_x'])
-                #     y1 = int(action['press_position_y'])
-                #     x2 = int(action['release_position_x'])
-                #     y2 = int(action['release_position_y'])
-                #     cv2.arrowedLine(cv2image, (x1, y1), (x2, y2), (0, 0, 255), 5)
-                # success, encoded_img = cv2.imencode('.jpg', cv2image)
+                # 画点
+                cv2image = cv2.imread(bounds_path)
+                if cv2image is not None:
+                    # 在点击位置画圆点
+                    cv2.circle(cv2image, (position_x, position_y), 15, (0, 255, 0), -1)  # 绿色实心圆
+                    # 保存带点击点的图像
+                    click_point_path = os.path.join(data_dir, f"{image_index}_click_point.jpg")
+                    cv2.imwrite(click_point_path, cv2image)
 
             else:
                 coordinates = grounder_response["coordinates"]
                 x, y = [int(coord / factor) for coord in coordinates]
                 device.click(x, y)
+                actions.append({
+                    "type": "click",
+                    "position_x": x,
+                    "position_y": y,
+                    "action_index": image_index
+                })
           
 
         elif action == "input":
@@ -321,7 +411,8 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
             device.input(text)
             actions.append({
                 "type": "input",
-                "text": text
+                "text": text,
+                "action_index": image_index
             })
             history.append(decider_response_str)
 
@@ -331,9 +422,23 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
             if direction == "DOWN":
                 device.swipe(direction.lower(), 2)
                 time.sleep(2)
+                # record the swipe as an action (index only)
+                actions.append({
+                    "type": "swipe",
+                    "press_position_x": None,
+                    "press_position_y": None,
+                    "release_position_x": None,
+                    "release_position_y": None,
+                    "direction": direction.lower(),
+                    "action_index": image_index
+                })
+                history.append(decider_response_str)
+                
+                # 为向下滑动创建可视化
+                create_swipe_visualization(data_dir, image_index, direction.lower())
                 continue
 
-            if direction in ["UP", "DOWN", "LEFT", "RIGHT"]:
+            if direction in ["UP", "LEFT", "RIGHT"]:
                 device.swipe(direction.lower())
                 actions.append({
                     "type": "swipe",
@@ -341,16 +446,21 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
                     "press_position_y": None,
                     "release_position_x": None,
                     "release_position_y": None,
-                    "direction": direction.lower()
+                    "direction": direction.lower(),
+                    "action_index": image_index
                 })
                 history.append(decider_response_str)
+                
+                # 为滑动创建可视化
+                create_swipe_visualization(data_dir, image_index, direction.lower())
 
             else:
                 raise ValueError(f"Unknown swipe direction: {direction}")
         elif action == "wait":
             print("Waiting for a while...")
             actions.append({
-                "type": "wait"
+                "type": "wait",
+                "action_index": image_index
             })
         else:
             raise ValueError(f"Unknown action: {action}")
@@ -373,10 +483,53 @@ def task_in_app(app, old_task, task, device, data_dir, bbox_flag=True):
 
 from utils.load_md_prompt import load_prompt
 app_selection_prompt_template = load_prompt("planner.md")
+fill_prompt_template = load_prompt("planner_fill.md")
+
+TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), 'experience', 'store')
+
+def list_task_templates():
+    templates = []
+    if os.path.isdir(TEMPLATE_DIR):
+        for fname in os.listdir(TEMPLATE_DIR):
+            if fname.endswith('.md'):
+                path = os.path.join(TEMPLATE_DIR, fname)
+                # 简单读取前两行作为描述（去掉Markdown标题符号）
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        lines = [l.strip() for l in f.readlines() if l.strip()]
+                    if lines:
+                        # 找第一行非空行
+                        first_line = lines[0].lstrip('# ').strip()
+                    else:
+                        first_line = '无描述'
+                except Exception:
+                    first_line = '读取失败'
+                templates.append({
+                    'file': fname,
+                    'path': path,
+                    'desc': first_line[:60]
+                })
+    # print(templates)
+    return templates
+
+def build_template_list_text():
+    items = []
+    for t in list_task_templates():
+        items.append(f"- {t['file']}: {t['desc']}")
+    if not items:
+        return "(当前无可用模板)"
+    return '\n'.join(items)
 
 def get_app_package_name(task_description):
-    """根据任务描述获取需要启动的app包名和改写后的任务描述"""
-    app_selection_prompt = app_selection_prompt_template.format(task_description=task_description)
+    """双阶段：阶段1选择APP与模板；阶段2若有模板则填充最终描述。"""
+    # 阶段1
+    template_list_text = build_template_list_text()
+    print(template_list_text)
+    app_selection_prompt = app_selection_prompt_template.format(
+        task_description=task_description,
+        task_templates=template_list_text
+    )
+    # print(app_selection_prompt)
     while True:
         response_str = planner_client.chat.completions.create(
             model="",
@@ -389,20 +542,52 @@ def get_app_package_name(task_description):
                 }
             ]
         ).choices[0].message.content
-
-        logging.info(f"应用选择响应: \n{response_str}")
-        
+        logging.info(f"阶段1 应用/模板选择响应: \n{response_str}")
         pattern = re.compile(r"```json\n(.*)\n```", re.DOTALL)
         match = pattern.search(response_str)
         if match:
             break
-        
-    response = json.loads(match.group(1))
-    app_name = response.get("app_name")
-    package_name = response.get("package_name")
-    new_task_description = response.get("task_description", task_description)  # 如果没有新描述，使用原描述
-        
-    return app_name, package_name, new_task_description
+    stage1 = json.loads(match.group(1))
+    app_name = stage1.get("app_name")
+    package_name = stage1.get("package_name")
+    optimized_desc = stage1.get("task_description", task_description)
+    template_name = stage1.get("template_name")
+
+    # 若无模板 直接返回
+    if not template_name:
+        return app_name, package_name, optimized_desc, None
+
+    # 阶段2 模板填充
+    template_path = os.path.join(TEMPLATE_DIR, template_name)
+    if not os.path.exists(template_path):
+        logging.warning(f"模板 {template_name} 不存在，跳过填充。")
+        return app_name, package_name, optimized_desc, template_name
+    with open(template_path, 'r', encoding='utf-8') as f:
+        template_content = f.read()
+    fill_prompt = fill_prompt_template.format(
+        original_task_description=task_description,
+        optimized_task_description=optimized_desc,
+        app_name=app_name,
+        package_name=package_name,
+        template_name=template_name,
+        template_content=template_content
+    )
+    # print(fill_prompt)
+    while True:
+        fill_resp_str = planner_client.chat.completions.create(
+            model="",
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": fill_prompt}]}
+            ]
+        ).choices[0].message.content
+        logging.info(f"阶段2 模板填充响应: \n{fill_resp_str}")
+        pattern2 = re.compile(r"```json\n(.*)\n```", re.DOTALL)
+        match2 = pattern2.search(fill_resp_str)
+        if match2:
+            break
+    stage2 = json.loads(match2.group(1))
+    final_desc = stage2.get("final_task_description", optimized_desc)
+    return app_name, package_name, final_desc, template_name
 
 # for testing purposes
 if __name__ == "__main__":
@@ -442,8 +627,7 @@ if __name__ == "__main__":
         os.makedirs(data_dir)
 
         task_description = task
-        app_name, package_name, new_task_description = get_app_package_name(task_description)
-
+        app_name, package_name, new_task_description, template_name = get_app_package_name(task_description)
         device.app_start(package_name)
-        print(f"Starting task '{new_task_description}' in app '{app_name}'")
+        print(f"Starting task '{new_task_description}' in app '{app_name}' (模板: {template_name})")
         task_in_app(app_name, task_description, new_task_description, device, data_dir, True)
