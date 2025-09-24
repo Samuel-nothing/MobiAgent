@@ -44,6 +44,10 @@ class Device(ABC):
     def keyevent(self, key):
         pass
 
+    @abstractmethod
+    def dump_hierarchy(self):
+        pass
+
 class AndroidDevice(Device):
     def __init__(self, adb_endpoint=None):
         super().__init__()
@@ -105,7 +109,6 @@ class AndroidDevice(Device):
 
     def keyevent(self, key):
         self.d.keyevent(key)
-        self.d.set_input_ime
 
     def dump_hierarchy(self):
         return self.d.dump_hierarchy()

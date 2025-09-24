@@ -197,7 +197,7 @@ def visual_prompt(root, actions):
             raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions with done")
     else:
         if(len(jpg_files)!= len(actions) + 1):
-            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without     done")
+            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without done")
 
     for i, action in enumerate(actions):
         img_path = os.path.join(root, f"{i + 1}.jpg")
