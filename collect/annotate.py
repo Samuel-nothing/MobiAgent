@@ -12,8 +12,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import base64, re
 import json
 
-from utils.parse_omni import extract_all_bounds, find_clicked_element
-
 from utils.load_md_prompt import load_prompt
 
 model = None
@@ -145,6 +143,8 @@ def add_action_index(actions):
     return actions
 
 def add_bounds_to_action(root, actions):
+    from utils.parse_omni import extract_all_bounds, find_clicked_element
+
     for i, action in enumerate(actions):
         flag = False
 
@@ -197,7 +197,7 @@ def visual_prompt(root, actions):
             raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions with done")
     else:
         if(len(jpg_files)!= len(actions) + 1):
-            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without     done")
+            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without done")
 
     for i, action in enumerate(actions):
         img_path = os.path.join(root, f"{i + 1}.jpg")

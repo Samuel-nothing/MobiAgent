@@ -58,6 +58,9 @@ grounder_prompt_bbox = load_prompt("grounder_bbox.md")
 decider_prompt = load_prompt("decider.md")
 decider_prompt_no_history = load_prompt("decider_nohistory.md")
 
+e2e_prompt = load_prompt("e2e.md")
+e2e_prompt_no_history = load_prompt("e2e_nohistory.md")
+
 def history_str(history):
     if len(history) == 0:
         return "(No history)"
@@ -104,7 +107,7 @@ def construct_ss_data(single_step_data_path, out_path, factor=0.5, train_ratio=0
     if not os.path.exists(single_step_data_path):
         return [], [], [], []
 
-    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config.json')
+    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config_custom.json')
     rules = load_augmentation_rules(augment_config_path)
 
     # 初始化所有返回变量
@@ -238,13 +241,17 @@ def create_grounder_entries_for_one_trace(react_data, actions, root, data_path, 
                 ))
     return grounder_entries
 
-def create_decider_entries_for_one_task(task, react_data, root, data_path, out_path, factor, rules, unexpected_img_safe_abspaths, is_train, do_copy=False):
+def create_decider_entries_for_one_task(task, react_data, actions, root, data_path, out_path, factor, rules, unexpected_img_safe_abspaths, is_train, do_copy=False, e2e=False):
     # decider
     normal_entries = []
     no_history_entries = []
     terminate_entries = []
 
     history = []
+
+    prompt_template = e2e_prompt if e2e else decider_prompt
+    no_history_prompt_template = e2e_prompt_no_history if e2e else decider_prompt_no_history
+
     for i, react in enumerate(react_data, 1):
         augment_rule = augment_data(react, rules)
         pos_num_repeat = position_num_repeat(i, len(react_data))
@@ -259,6 +266,15 @@ def create_decider_entries_for_one_task(task, react_data, root, data_path, out_p
         action_type = react["function"]["name"]
         param = react["function"]["parameters"]
         
+        if e2e and action_type == "click":
+            action = actions[i - 1]
+            bbox = action.get("bounds", None)
+
+            if bbox:
+                param.update(dict(bbox=bbox))
+            else:
+                print(f"warning: action {i} has no bbox in {root}")
+
         output_dict = dict(reasoning=reasoning, action=action_type, parameters=param)
         output = json.dumps(output_dict, ensure_ascii=False)
 
@@ -275,7 +291,7 @@ def create_decider_entries_for_one_task(task, react_data, root, data_path, out_p
         for partial_history in partial_histories:
             normal_entries.extend(create_entries_for_one_step(
                 num_repeat=pos_num_repeat * reason_aug_num_repeat, 
-                instruction=decider_prompt.format(task=task, history=history_str(partial_history)), 
+                instruction=prompt_template.format(task=task, history=history_str(partial_history)), 
                 output=output, 
                 image_path=out_abspath
             ))
@@ -309,7 +325,7 @@ def create_decider_entries_for_one_task(task, react_data, root, data_path, out_p
 
             terminate_entries.extend(create_entries_for_one_step(
                 num_repeat=pos_num_repeat * reason_aug_num_repeat,
-                instruction=decider_prompt.format(task=task, history=history_str(history)),
+                instruction=prompt_template.format(task=task, history=history_str(history)),
                 output=terminate_output,
                 image_path=random.choice(unexpected_img_safe_abspaths)
             ))
@@ -319,17 +335,24 @@ def create_decider_entries_for_one_task(task, react_data, root, data_path, out_p
         if action_type != "done" and action_type != "input":
             no_history_entries.extend(create_entries_for_one_step(
                 num_repeat=pos_num_repeat * reason_no_history_aug_num_repeat,
-                instruction=decider_prompt_no_history.format(task=task),
+                instruction=no_history_prompt_template.format(task=task),
                 output=output,
                 image_path=out_abspath
             ))
 
     return normal_entries, no_history_entries, terminate_entries
 
-
-def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path, factor=0.5, train_ratio=0.9):
+def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path, factor=0.5, train_ratio=0.9, e2e=False):
     os.makedirs(out_path, exist_ok=True)
     
+    e2e_entries_train = []
+    e2e_terminate_entries_train = []
+    e2e_no_history_entries_train = []
+    
+    e2e_entries_val = []
+    e2e_terminate_entries_val = []
+    e2e_no_history_entries_val = []
+
     # 训练集
     decider_entries_train = []
     terminate_entries_train = []
@@ -342,7 +365,7 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
     decider_no_history_entries_val = []
     grounder_entries_val = []
 
-    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config.json')
+    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config_custom.json')
     rules = load_augmentation_rules(augment_config_path)
 
     #TODO: unexpected_img_path 不存在情况
@@ -408,12 +431,12 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
         is_train = random.random() < train_ratio
         for i, task in enumerate(tasks):
             normal_entries, no_history_entries, terminate_entries = create_decider_entries_for_one_task(
-                task, react_data, root, data_path, out_path, factor, rules, unexpected_img_safe_abspaths, is_train, do_copy=(i == 0)
+                task, react_data, actions, root, data_path, out_path, factor, rules, unexpected_img_safe_abspaths, is_train, do_copy=(i == 0), e2e=False
             )
             if i != 0:
-                normal_entries = random.sample(normal_entries, len(normal_entries) * 3 // 4 )
-                no_history_entries = random.sample(no_history_entries, len(no_history_entries) * 3 // 4)
-                terminate_entries = random.sample(terminate_entries, len(terminate_entries) * 3 // 4)
+                normal_entries = random.sample(normal_entries, len(normal_entries) * 2 // 3 )
+                no_history_entries = random.sample(no_history_entries, len(no_history_entries) * 2 // 3)
+                terminate_entries = random.sample(terminate_entries, len(terminate_entries) * 2 // 3)
             if is_train:
                 decider_entries_train.extend(normal_entries)
                 decider_no_history_entries_train.extend(no_history_entries)
@@ -422,6 +445,18 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
                 decider_entries_val.extend(normal_entries)
                 decider_no_history_entries_val.extend(no_history_entries)
                 terminate_entries_val.extend(terminate_entries)
+            if e2e:
+                e2e_normal_entries, e2e_history_entries, e2e_terminate_entries = create_decider_entries_for_one_task(
+                    task, react_data, actions, root, data_path, out_path, factor, rules, unexpected_img_safe_abspaths, is_train, do_copy=False, e2e=True
+                )
+                if is_train:
+                    e2e_entries_train.extend(e2e_normal_entries)
+                    e2e_no_history_entries_train.extend(e2e_history_entries)
+                    e2e_terminate_entries_train.extend(e2e_terminate_entries)
+                else:
+                    e2e_entries_val.extend(e2e_normal_entries)
+                    e2e_no_history_entries_val.extend(e2e_history_entries)
+                    e2e_terminate_entries_val.extend(e2e_terminate_entries)
 
         grounder_entries = create_grounder_entries_for_one_trace(react_data, actions, root, data_path, out_path, factor, rules, is_train, do_copy=False)
         if is_train:
@@ -432,8 +467,8 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
     decider_ss_entry_train, decider_ss_entry_val, grounder_ss_entry_train, grounder_ss_entry_val = construct_ss_data(single_step_data_path, out_path, factor, train_ratio)
 
     # 合并训练集数据
-    terminate_entries_train = random.sample(terminate_entries_train, len(terminate_entries_train) // 10)
-    terminate_entries_val = random.sample(terminate_entries_val, len(terminate_entries_val) // 10)
+    terminate_entries_train = random.sample(terminate_entries_train, min(len(decider_entries_train) // 75, len(terminate_entries_train)))
+    terminate_entries_val = random.sample(terminate_entries_val, min(len(decider_entries_val) // 75, len(terminate_entries_val)))
 
     print(f"decider_entries_train: {len(decider_entries_train)}")
     print(f"decider_no_history_entries_train: {len(decider_no_history_entries_train)}")
@@ -490,6 +525,27 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
     grounder_entries_val_dict.extend([asdict(entry) for entry in grounder_ss_entry_val])
     # random.shuffle(grounder_entries_val_dict)
 
+    if e2e:
+        e2e_entries_train = [asdict(entry) for entry in e2e_entries_train]
+        e2e_entries_train.extend([asdict(entry) for entry in e2e_no_history_entries_train])
+        e2e_entries_train.extend([asdict(entry) for entry in e2e_terminate_entries_train])
+        e2e_entries_val = [asdict(entry) for entry in e2e_entries_val]
+        e2e_entries_val.extend([asdict(entry) for entry in e2e_no_history_entries_val])
+        e2e_entries_val.extend([asdict(entry) for entry in e2e_terminate_entries_val])
+        data.update({
+            "e2e_entries_train": len(e2e_entries_train),
+            "e2e_no_history_entries_train": len(e2e_no_history_entries_train),
+            "e2e_terminate_entries_train": len(e2e_terminate_entries_train),
+            "e2e_entries_val": len(e2e_entries_val),
+            "e2e_no_history_entries_val": len(e2e_no_history_entries_val),
+            "e2e_terminate_entries_val": len(e2e_terminate_entries_val)
+        })
+
+        with open(os.path.join(out_path, f"mobimind_e2e_train.json"), "w", encoding="UTF-8") as f:
+            json.dump(e2e_entries_train, f, ensure_ascii=False)
+        with open(os.path.join(out_path, f"mobimind_e2e_val.json"), "w", encoding="UTF-8") as f:
+            json.dump(e2e_entries_val, f, ensure_ascii=False)
+
     # 保存训练集
     with open(os.path.join(out_path, f"mobimind_decider_train.json"), "w", encoding="UTF-8") as f:
         json.dump(decider_entries_train, f, ensure_ascii=False)
@@ -514,6 +570,7 @@ if __name__ == "__main__":
     parser.add_argument("--out_path", type=str, default="output", help="output path of train dataset (default: output)")
     parser.add_argument("--factor", type=float, default=0.5, help="resize factor for images (default: 0.5)")
     parser.add_argument("--train_ratio", type=float, default=0.9, help="ratio of training data (default: 0.9)")
+    parser.add_argument('--e2e',action='store_true',help='construct e2e dataset')
     args = parser.parse_args()
     construct_ds(
         data_path=args.data_path,
@@ -522,4 +579,5 @@ if __name__ == "__main__":
         out_path=args.out_path,
         factor=args.factor,
         train_ratio=args.train_ratio,
+        e2e=args.e2e
     )
