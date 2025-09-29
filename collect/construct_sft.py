@@ -107,7 +107,7 @@ def construct_ss_data(single_step_data_path, out_path, factor=0.5, train_ratio=0
     if not os.path.exists(single_step_data_path):
         return [], [], [], []
 
-    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config_custom.json')
+    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config.json')
     rules = load_augmentation_rules(augment_config_path)
 
     # 初始化所有返回变量
@@ -365,7 +365,7 @@ def construct_ds(data_path, single_step_data_path, unexpected_img_path, out_path
     decider_no_history_entries_val = []
     grounder_entries_val = []
 
-    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config_custom.json')
+    augment_config_path = os.path.join(os.path.dirname(__file__), 'augment_config.json')
     rules = load_augmentation_rules(augment_config_path)
 
     #TODO: unexpected_img_path 不存在情况
