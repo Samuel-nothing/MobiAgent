@@ -244,17 +244,19 @@ data/
 |   |-- 1.jpg
 |   |-- 2.jpg
 |   |-- ...
+|   |-- actions.json
 |   `-- react.json
 `-- some-subpath2
-  |-- 1.jpg
-  |-- 2.jpg
-  |-- ...
-  `-- react.json
+    |-- 1.jpg
+    |-- 2.jpg
+    |-- ...
+    |-- actions.json
+    `-- react.json
 ```
 
-`some-subpath` can be any depth, as needed. The deepest subdirectory contains `n` screenshots and a `react.json` of length `n`, with actions and screenshots matched by index, forming a complete trajectory.
+`some-subpath` can be any depth, as needed. The deepest subdirectory contains `n` screenshots and action lists `react.json` + `actions.json` of length `n`, with actions and screenshots matched by index, forming a complete task operation trajectory.
 
-`ss_data_path` stores manually collected single-step action data. Example directory structure is as follows:
+`ss_data_path` stores manually collected single-step action data and can be empty. Example directory structure is as follows:
 
 ```
 ss_data/
@@ -273,4 +275,66 @@ ss_data/
     `-- react.json
 ```
 
-`ss_data_path` must only contain `decider` and `grounder` as top-level directories, for training the respective models. `some-subpath` can be any depth or name. The deepest subdirectory contains `n` screenshots and a `react.json` of length `n`, with actions and screenshots matched by index, and all pairs are single-step and independent. In particular, subdirectories under `decider` also contain a `tasks.json` list, from which a random task is sampled for each screenshot-action pair when constructing the training dataset prompt.
+`ss_data_path` must only contain `decider` and `grounder` as top-level directories, for training the respective models. `some-subpath` can be any depth or name. The deepest subdirectory contains `n` screenshots and action list `react.json` of length `n`, with actions and screenshots matched by index, and all pairs are single-step and independent. Subdirectories do not contain `actions.json`.
+
+* Subdirectories under `ss_data/decider` also contain a `tasks.json` list of arbitrary length. When constructing the training dataset, a random task is sampled from the list for each screenshot-action pair to fill the task description part of the training prompt.
+* Subdirectories under `ss_data/grounder` should have a `react.json` in which each item must be `click` action and include an additional `bbox` field representing the bounding box (absolute coordinates) of the target element, for example:
+
+```json
+[
+    {
+        "reasoning": "...",
+        "function": {
+            "name": "click",
+            "parameters": {
+                "target_element": "..."
+            }
+        },
+        "bbox": [100, 200, 300, 400]
+    }
+]
+```
+
+`unexpected_img_path` directory stores screenshots of ads or pop-ups that require the agent to terminate task execution when encountered, and can be empty.
+
+### Data Augmentation (Optional)
+
+The training dataset construction supports data augmentation based on predefined rules. You can modify the `augment_config.json` file to adjust data distribution by applying regex matching on each action (item in `react.json`). Each rule contains three fields:
+
+* `dir`: the JSON field path to match
+* `pattern`: the field value to match (use regex)
+* `multiplier`: the augmentation multiplier, `decider`, `decider_no_history`, `grounder` represent the corresponding dataset's augmentation factor, `default` represents the default augmentation factor (when a dataset's augmentation factor is not specified).
+
+Example:
+
+1. Multiply `swipe` actions by 5x in the `decider` dataset
+
+```json
+{
+    "dir": [
+        "function",
+        "name"
+    ],
+    "pattern": "swipe",
+    "multiplier": {
+        "decider": 5,
+        "decider_no_history": 5,
+        "grounder": 1,
+        "default": 1
+    }
+}
+```
+
+2. Multiply actions whose `reasoning` contains the keyword "delete" by 3x in all datasets
+
+```json
+{
+    "dir": [
+        "reasoning"
+    ],
+    "pattern": "delete",
+    "multiplier": {
+        "default": 3
+    }
+}
+```

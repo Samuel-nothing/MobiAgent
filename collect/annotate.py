@@ -12,8 +12,6 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 import base64, re
 import json
 
-from utils.parse_omni import extract_all_bounds, find_clicked_element
-
 from utils.load_md_prompt import load_prompt
 
 model = None
@@ -145,6 +143,8 @@ def add_action_index(actions):
     return actions
 
 def add_bounds_to_action(root, actions):
+    from utils.parse_omni import extract_all_bounds, find_clicked_element
+
     for i, action in enumerate(actions):
         flag = False
 
@@ -190,14 +190,14 @@ def visual_prompt(root, actions):
             file_path = os.path.join(root, file_name)
             os.remove(file_path)
 
-    jpg_files = [f for f in os.listdir(root) if f.endswith('.jpg')]
+    jpg_files = [f for f in os.listdir(root) if f.endswith('.jpg') and f.replace('.jpg', '').isdigit()]
 
     if actions[-1]["type"] == "done":
         if(len(jpg_files)!= len(actions)):
             raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions with done")
     else:
         if(len(jpg_files)!= len(actions) + 1):
-            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without     done")
+            raise Exception(f"[Visual Prompt] {root} has {len(jpg_files)} images, but {len(actions)} actions without done")
 
     for i, action in enumerate(actions):
         img_path = os.path.join(root, f"{i + 1}.jpg")
@@ -257,6 +257,54 @@ def visual_prompt(root, actions):
                 f.write(encoded_img.tobytes())
     print(f"[Visual Prompt] done")
 
+def extract_json_from_response(response_content: str):
+    # 优先匹配 ```json ... ```
+    pattern_json = re.compile(r"```json\s*(.*?)\s*```", re.DOTALL)
+    # 兜底匹配 ``` ... ```
+    pattern_any = re.compile(r"```\s*(.*?)\s*```", re.DOTALL)
+
+    match = pattern_json.search(response_content) or pattern_any.search(response_content)
+
+    if not match:
+        print("[Reasoning] No JSON block found.")
+        return None
+
+    json_str = match.group(1).strip()
+    print("[Debug] Extracted JSON snippet:", json_str[:120], "...")
+
+    # 第一次尝试解析
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"[Warning] JSON decode failed: {e}")
+    
+    # ---- 容错修复逻辑 ----
+    fixed_str = json_str
+
+    # 1. 去掉多余的尾部逗号
+    fixed_str = re.sub(r",(\s*[\]}])", r"\1", fixed_str)
+
+    # 2. 去掉不可见字符
+    fixed_str = fixed_str.replace("\u3000", " ").replace("\xa0", " ")
+
+    # 3. 如果开头/结尾有多余的说明文字，尝试截取到第一个 `[` 或 `{`
+    start = min((fixed_str.find("["), fixed_str.find("{")))
+    if start != -1:
+        fixed_str = fixed_str[start:]
+    # 尝试截断到最后一个 `]` 或 `}`
+    end = max(fixed_str.rfind("]"), fixed_str.rfind("}"))
+    if end != -1:
+        fixed_str = fixed_str[:end+1]
+
+    # 再次尝试解析
+    try:
+        return json.loads(fixed_str)
+    except json.JSONDecodeError as e:
+        print(f"[Error] Still invalid JSON: {e}")
+        print("[Debug] Failed JSON string:", fixed_str[:500], "...")
+        return None
+
+
 def auto_annotate(root, chain, task_description, actions):
     print(f"[Reasoning] root: \"{root}\" task: \"{task_description}\"")
 
@@ -269,58 +317,62 @@ def auto_annotate(root, chain, task_description, actions):
         with open(img_path, "rb") as f:
             image_data.append(base64.b64encode(f.read()).decode("utf-8"))
 
-    max_attempts = 3
-    for attempt in range(0, max_attempts):
-        response = chain.invoke({
-            "goal": task_description,
-            "screenshot_count": len(image_data),
-            "messages": [
-                (
-                    "user",
-                    [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}} for image in image_data]
-                )
-            ]
-        })
+    max_attempts = 1
+    max_images_per_request = 16  # 每次请求的最大图片数量
 
-        pattern = re.compile(r"```json\n(.*)\n```", re.DOTALL)
-        match = pattern.search(response.content)
-        if match is None:
-            print(f"[Reasoning] Attempt {attempt + 1} failed, no JSON found in response.")
-            continue
-        
-        try:
-            json_str = match.group(1)
-            data = json.loads(json_str)
-            reasoning_count = len(data)
-            if(len(image_data) != reasoning_count):
-                raise Exception(f"[Invalid reasoning count]")
-            react_json = os.path.join(root, "temp.json")
-            with open(react_json, "w", encoding="UTF-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
+    # 将 image_data 分批处理
+    image_batches = [
+        image_data[i:i + max_images_per_request]
+        for i in range(0, len(image_data), max_images_per_request)
+    ]
 
-            compare_actions(actions, data)
+    all_data = []  # 用于存储所有批次的结果
 
-        except Exception as e:
-            print(f"[Reasoning] Attempt {attempt + 1} failed, error: {str(e)}")
-            continue
-        break
+    for batch_index, batch in enumerate(image_batches):
+        print(f"[Debug] Processing batch {batch_index + 1}/{len(image_batches)} with {len(batch)} images.")
+        for attempt in range(0, max_attempts):
+            try:
+                response = chain.invoke({
+                    "goal": task_description,
+                    "screenshot_count": len(batch),
+                    "messages": [
+                        (
+                            "user",
+                            [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}} for image in batch]
+                        )
+                    ]
+                })
 
-    json_str = match.group(1)
-    data = json.loads(json_str)
-    reasoning_count = len(data)
-    if(len(image_data) != reasoning_count):
-        raise Exception(f"[Invalid reasoning count]")
+                print(f"[Debug] Response for batch {batch_index + 1}, attempt {attempt + 1}: {response.content}")
 
-    # # 为 react.json 中的数据添加 action_index
-    # for i, item in enumerate(data):
-    #     if isinstance(item, dict):
-    #         item['action_index'] = i + 1
+                match = extract_json_from_response(response.content)
 
-    compare_actions(actions, data)
+                if match is None:
+                    print(f"[Reasoning] Batch {batch_index + 1}, Attempt {attempt + 1} failed, no JSON found in response.")
+                    continue
+
+
+                all_data.extend(match)  # 合并当前批次的结果
+                break
+
+            except Exception as e:
+                print(f"[Reasoning] Batch {batch_index + 1}, Attempt {attempt + 1} failed, error: {str(e)}")
+                continue
+
+    reasoning_count = len(all_data)
+    if len(image_data) != reasoning_count:
+        raise Exception(f"[Invalid reasoning count: expected {len(image_data)}, got {reasoning_count}]")
+
+    temp_json_path = os.path.join(root, "temp.json")
+    with open(temp_json_path, "w", encoding="UTF-8") as temp_file:
+        json.dump(match, temp_file, ensure_ascii=False, indent=4)
+    print(f"[Debug] Saved temp JSON to {temp_json_path}")
+    
+    compare_actions(actions, all_data)
 
     react_json = os.path.join(root, "react.json")
     with open(react_json, "w", encoding="UTF-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+        json.dump(all_data, f, ensure_ascii=False, indent=4)
 
     print(f"[Reasoning] finished, saved to {react_json}")
 
@@ -340,7 +392,7 @@ if __name__ == "__main__":
     )
 
     from utils.load_md_prompt import load_prompt
-    sys_prompt = load_prompt("annotation_en_general.md")
+    sys_prompt = load_prompt("annotation_zh_general.md")
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -385,9 +437,11 @@ if __name__ == "__main__":
 
             app_name = data.get("app_name")
             if(isinstance(task_description, str)):
-                new_tasks = change_task_description(app_name, task_description)
-                all_tasks = [task_description] + new_tasks
-                data["task_description"] = all_tasks
+                # new_tasks = change_task_description(app_name, task_description)
+                new_tasks = task_description
+                data["task_description"] = new_tasks  # 不修改任务描述
+                # all_tasks = [task_description] + new_tasks
+                # data["task_description"] = all_tasks
 
                 with open(actions_json, 'w', encoding='utf-8') as file:
                     json.dump(data, file, ensure_ascii=False, indent=4)

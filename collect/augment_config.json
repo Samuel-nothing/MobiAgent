@@ -6,10 +6,10 @@
         ],
         "pattern": "swipe",
         "multiplier": {
-            "reason": 5,
-            "reason_no_history": 5,
+            "decider": 5,
+            "decider_no_history": 5,
             "grounder": 1,
-            "other": 1
+            "default": 1
         }
     }
 ]

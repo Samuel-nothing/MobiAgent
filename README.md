@@ -39,8 +39,9 @@ MobiAgent: A Systematic Framework for Customizable Mobile Agents
 </div>
 
 ## News
-
-- `[2025.8.30]`🔥 We've open-sourced the MobiAgent!
+- `[2025.9.30]` 🚀 added a local experience retrieval module, supporting experience query based on task description, enhancing the intelligence and efficiency of task planning!
+- `[2025.9.29]` 🔥We've open-sourced a mixed version of MobiMind, capable of handling **both Decider and Grounder tasks**! Feel free to download and try it at [MobiMind-Mixed-7B](https://huggingface.co/IPADS-SAI/MobiMind-Mixed-7B).
+- `[2025.8.30]` We've open-sourced the MobiAgent!
 
 ## Evaluation Results
 
@@ -176,3 +177,6 @@ If you find MobiAgent useful in your research, please feel free to cite our [pap
 ## Acknowledgements
 We gratefully acknowledge the open-source projects like MobileAgent, UI-TARS, and Qwen-VL, etc. We also thank the National Innovation Institute of High-end Smart Appliances for their support of this project.
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=IPADS-SAI/MobiAgent&type=Date)](https://www.star-history.com/#IPADS-SAI/MobiAgent&Date)
