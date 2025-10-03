@@ -306,6 +306,7 @@ async def delete_current_data():
 
 
 app_packages ={
+    "设置": "com.android.settings",
     "微信": "com.tencent.mm",
     "QQ": "com.tencent.mobileqq",
     "微博": "com.sina.weibo",

@@ -1,3 +1,7 @@
+python -m runner.mobiagent.mobiagent --service_ip 172.30.60.30 --decider_port 8100 --grounder_port 8101 --planner_port 8102
+
+
+---
 <div align="center">
   <picture>
     <img alt="MobiAgent" src="assets/logo.png" width=10%>

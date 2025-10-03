@@ -13,7 +13,40 @@ import argparse
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 配置日志编码以支持中文显示
+import sys
+try:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', encoding='utf-8')
+except ValueError:
+    # 如果encoding参数不支持，使用默认配置并设置环境变量
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    # 确保stdout和stderr使用UTF-8编码
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+
+# 创建自定义处理器确保中文正确显示
+class ChineseEncodingHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # 确保消息使用UTF-8编码
+            if isinstance(msg, str):
+                msg = msg.encode('utf-8').decode('utf-8')
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+# 替换默认处理器
+for handler in logging.getLogger().handlers:
+    if isinstance(handler, logging.StreamHandler):
+        logging.getLogger().removeHandler(handler)
+
+# 添加支持中文的处理器
+chinese_handler = ChineseEncodingHandler(sys.stdout)  # 输出到stdout而不是默认的stderr
+chinese_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(chinese_handler)
 
 MAX_STEPS = 30
 
@@ -50,6 +83,7 @@ class AndroidDevice(Device):
         else:
             self.d = u2.connect()
         self.app_package_names = {
+            "设置": "com.android.settings",
             "携程": "ctrip.android.view",
             "同城": "com.tongcheng.android",
             "飞猪": "com.taobao.trip",
@@ -418,6 +452,15 @@ if __name__ == "__main__":
     # 使用命令行参数初始化
     init(args.service_ip, args.decider_port, args.grounder_port, args.planner_port)
 
+    # 在創建新設備實例前，先嘗試重置現有的 UiAutomation 連接
+    try:
+        # 嘗試重置現有的連接
+        temp_device = u2.connect()
+        temp_device.reset_uiautomator()
+        print("已重置 UiAutomation 連接")
+    except Exception as e:
+        print(f"重置 UiAutomation 連接失敗 (可能沒有現有連接): {e}")
+
     device = AndroidDevice()
     print(f"connect to device")
 
@@ -432,18 +475,38 @@ if __name__ == "__main__":
     
     # print(task_list)
 
-    for task in task_list:
-        existing_dirs = [d for d in os.listdir(data_base_dir) if os.path.isdir(os.path.join(data_base_dir, d)) and d.isdigit()]
-        if existing_dirs:
-            data_index = max(int(d) for d in existing_dirs) + 1
-        else:
-            data_index = 1
-        data_dir = os.path.join(data_base_dir, str(data_index))
-        os.makedirs(data_dir)
+    try:
+        for task in task_list:
+            existing_dirs = [d for d in os.listdir(data_base_dir) if os.path.isdir(os.path.join(data_base_dir, d)) and d.isdigit()]
+            if existing_dirs:
+                data_index = max(int(d) for d in existing_dirs) + 1
+            else:
+                data_index = 1
+            data_dir = os.path.join(data_base_dir, str(data_index))
+            os.makedirs(data_dir)
 
-        task_description = task
-        app_name, package_name, new_task_description = get_app_package_name(task_description)
+            task_description = task
+            app_name, package_name, new_task_description = get_app_package_name(task_description)
 
-        device.app_start(package_name)
-        print(f"Starting task '{new_task_description}' in app '{app_name}'")
-        task_in_app(app_name, task_description, new_task_description, device, data_dir, True)
+            device.app_start(package_name)
+            print(f"Starting task '{new_task_description}' in app '{app_name}'")
+            task_in_app(app_name, task_description, new_task_description, device, data_dir, True)
+
+            # 任務完成後清理 UiAutomation 連接，為下一個任務做準備
+            try:
+                device.d.reset_uiautomator()
+                print("任務間清理 UiAutomation 連接")
+            except Exception as e:
+                print(f"任務間清理 UiAutomation 連接失敗: {e}")
+
+    except Exception as e:
+        print(f"任務執行失敗: {e}", file=sys.stderr)
+
+    finally:
+        # 無論成功或失敗，都嘗試清理 UiAutomation 連接
+        try:
+            if device and hasattr(device, 'd'):
+                device.d.reset_uiautomator()
+                print("已清理 UiAutomation 連接")
+        except Exception as cleanup_e:
+            print(f"清理 UiAutomation 連接失敗: {cleanup_e}")

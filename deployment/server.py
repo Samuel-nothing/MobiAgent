@@ -23,6 +23,7 @@ terminate_checklist = [
 ]
 
 supported_apps = {
+    "设置": "com.android.settings",
     "微信": "com.tencent.mm",
     "QQ": "com.tencent.mobileqq",
     "微博": "com.sina.weibo",
@@ -68,6 +69,7 @@ PLANNER_PROMPT = '''
 
 ## 可用应用列表
 以下是可用的应用及其包名：
+- 设置: com.android.settings
 - 微信: com.tencent.mm
 - QQ: com.tencent.mobileqq
 - 新浪微博: com.sina.weibo
@@ -88,6 +90,7 @@ PLANNER_PROMPT = '''
 
 ## 默认应用列表
 以下是各个应用类别的默认应用：
+
 
 通讯应用：
 - 微信: com.tencent.mm

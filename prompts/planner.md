@@ -6,29 +6,10 @@
 
 ## 可用应用列表
 以下是可用的应用及其包名：
-- 微信: com.tencent.mm
-- QQ: com.tencent.mobileqq
-- 新浪微博: com.sina.weibo
-- 饿了么: me.ele
-- 美团: com.sankuai.meituan
-- bilibili: tv.danmaku.bili
-- 爱奇艺: com.qiyi.video
-- 腾讯视频: com.tencent.qqlive
-- 优酷: com.youku.phone
-- 淘宝: com.taobao.taobao
-- 京东: com.jingdong.app.mall
-- 携程: ctrip.android.view
-- 同城: com.tongcheng.android
-- 飞猪: com.taobao.trip
-- 去哪儿: com.Qunar
-- 华住会: com.htinns
-- 知乎: com.zhihu.android
-- 小红书: com.xingin.xhs
-- QQ音乐: com.tencent.qqmusic
-- 网易云音乐: com.netease.cloudmusic
-- 酷狗音乐: com.kugou.android
-- 抖音: com.ss.android.ugc.aweme
-- 高德地图: com.autonavi.minimap
+- Essential Space: com.nothing.ntessentialspace
+- Nothing Weather: com.nothing.weather
+- Gmail: com.google.android.gm
+- 设置: com.android.settings
 
 ## 任务要求
 1. 分析任务描述，选择最合适的应用来完成该任务
